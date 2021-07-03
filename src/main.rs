@@ -1,6 +1,8 @@
 use image;
 use glam::{Vec3};
-use rand::Rng;
+use rand::{Rng};
+use rand::rngs::ThreadRng;
+use std::rc::Rc;
 
 struct Ray {
     a: Vec3,
@@ -25,10 +27,61 @@ impl Ray {
     }
 }
 
+struct AttenuatedRay {
+    attenuation: Vec3,
+    ray: Ray
+}
+
+trait Material {
+    fn scatter(&self, r: &Ray, rec: &HitRecord, rng: &mut ThreadRng) -> Option<AttenuatedRay>;
+}
+
+struct Lambertian {
+    albedo: Vec3
+}
+
+impl Material for Lambertian {
+    fn scatter(&self, _r: &Ray, rec: &HitRecord, rng: &mut ThreadRng) -> Option<AttenuatedRay> {
+        let mut scatter_direction = rec.normal + random_unit_vector(rng);
+
+        if near_zero(scatter_direction) {
+            scatter_direction = rec.normal;
+        }
+
+        Some(AttenuatedRay {
+            attenuation: self.albedo,
+            ray: Ray::new(rec.p, scatter_direction)
+        })
+    }
+
+}
+
 struct HitRecord {
     t:f32,
     p:Vec3,
-    normal:Vec3
+    front_face: bool,
+    normal:Vec3,
+    material: Rc<dyn Material>
+}
+
+impl HitRecord {
+    fn new(t: f32, p:Vec3, r: &Ray, outward_normal:Vec3,
+            material: Rc<dyn Material>) -> HitRecord {
+        let (front_face, normal) = HitRecord::face_normal(r, outward_normal);   
+        HitRecord {
+            t,
+            p,
+            front_face,
+            normal,
+            material
+        }
+    }
+
+    fn face_normal(r: &Ray, outward_normal: Vec3) -> (bool, Vec3) {
+        let front_face = r.direction().dot(outward_normal) < 0.;
+        let normal = if front_face { outward_normal } else { -outward_normal };
+        (front_face, normal)
+    }
 }
 
 trait Hitable {
@@ -37,14 +90,16 @@ trait Hitable {
 
 struct Sphere {
     centre: Vec3,
-    radius: f32
+    radius: f32,
+    material: Rc<dyn Material>
 }
 
 impl Sphere {
-    fn new(centre:&[f32;3], radius:f32) -> Sphere {
+    fn new(centre:&[f32;3], radius:f32, material: Rc<dyn Material>) -> Sphere {
         Sphere {
             centre: Vec3::from_slice(centre),
-            radius
+            radius,
+            material
         }
     }
 }
@@ -62,11 +117,10 @@ impl Hitable for Sphere {
                 (-b + discriminant.sqrt()) / (2. * a)].iter() {
                 if *temp < t_max && *temp > t_min {
                     let p = r.point_at_parameter(*temp);
-                    return Some(HitRecord {
-                        t: *temp,
-                        p: p,
-                        normal: (p - self.centre) / self.radius
-                    });
+                    return Some(HitRecord::new(
+                        *temp, p, r,
+                        (p - self.centre) / self.radius,
+                        Rc::clone(&self.material)));
                 }
             }
         }
@@ -117,13 +171,13 @@ impl Camera {
     }
 }
 
-fn vec3_random<R: Rng>(rng: &mut R, min:f32, max:f32) -> Vec3 {
+fn vec3_random(rng: &mut impl Rng, min:f32, max:f32) -> Vec3 {
     Vec3::new(rng.gen_range(min..max),
                 rng.gen_range(min..max),
                 rng.gen_range(min..max))
 }
 
-fn random_in_unit_sphere<R: Rng>(rng: &mut R) -> Vec3 {
+fn random_in_unit_sphere(rng: &mut impl Rng) -> Vec3 {
     loop {
         let p = vec3_random(rng, -1., 1.);
         if p.length_squared() <= 1. {
@@ -132,18 +186,26 @@ fn random_in_unit_sphere<R: Rng>(rng: &mut R) -> Vec3 {
     }
 }
 
-fn random_unit_vector<R: Rng>(rng: &mut R) -> Vec3 {
+fn random_unit_vector(rng: &mut impl Rng) -> Vec3 {
     random_in_unit_sphere(rng).normalize()
 }
 
-fn ray_colour<R: Rng>(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut R) -> Vec3 {
+fn near_zero(v: Vec3) -> bool {
+    let e = 1e-8;
+    v.x.abs() < e && v.y.abs() < e && v.z.abs() < e
+}
+
+fn ray_colour(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut ThreadRng) -> Vec3 {
     if depth < 0 {
         return Vec3::ZERO;
     }
 
     if let Some(rec) = world.hit(&r, 0.001, f32::INFINITY) {
-        let target = rec.p + rec.normal + random_unit_vector(rng);
-        return 0.5 * ray_colour(world, &Ray::new(rec.p, target - rec.p), depth - 1, rng);
+        if let Some(scattered) = rec.material.scatter(r, &rec, rng) {
+            return scattered.attenuation * ray_colour(world, &scattered.ray, depth - 1, rng);
+        } else {
+            return Vec3::ZERO;
+        }
     }
     let unit_direction = r.direction().normalize();
     let t = 0.5 * (unit_direction.y + 1.0);
@@ -174,9 +236,13 @@ fn main() {
 
     let camera = Camera::new();
 
-    let sphere = Sphere::new(&[0., 0., -1.], 0.5);
-    let sphere2 = Sphere::new(&[0., -100.5, -1.], 100.);
-    let sphere3 = Sphere::new(&[-0.5, -0.5, -0.5], 0.25);
+    let material:Rc<dyn Material> = Rc::new(Lambertian {
+        albedo: Vec3::new(0.8, 0.8, 0.)
+    });
+
+    let sphere = Sphere::new(&[0., 0., -1.], 0.5, Rc::clone(&material));
+    let sphere2 = Sphere::new(&[0., -100.5, -1.], 100., Rc::clone(&material));
+    let sphere3 = Sphere::new(&[-0.5, -0.5, -0.5], 0.25, Rc::clone(&material));
 
     let hit_list = HitableList {
         list:vec![&sphere, &sphere2, &sphere3]
