@@ -1,5 +1,6 @@
 use image;
 use glam::{Vec3};
+use rand::Rng;
 
 struct Ray {
     a: Vec3,
@@ -37,6 +38,15 @@ trait Hitable {
 struct Sphere {
     centre: Vec3,
     radius: f32
+}
+
+impl Sphere {
+    fn new(centre:&[f32;3], radius:f32) -> Sphere {
+        Sphere {
+            centre: Vec3::from_slice(centre),
+            radius
+        }
+    }
 }
 
 impl Hitable for Sphere {
@@ -82,50 +92,108 @@ impl <'a> Hitable for HitableList<'a> {
     }
 }
 
-fn colour(hitable: &dyn Hitable, r: &Ray) -> Vec3 {
-    let ot = hitable.hit(&r, 0.0, f32::INFINITY);
-    if let Some(t) = ot {
-        let n = t.normal;
-        return 0.5 * Vec3::new(n.x + 1., n.y + 1., n.z + 1.)
+struct Camera {
+    origin: Vec3,
+    lower_left_corner: Vec3,
+    horizontal: Vec3,
+    vertical: Vec3
+}
+
+impl Camera {
+    fn new() -> Camera {
+        Camera {
+            origin: Vec3::ZERO,
+            lower_left_corner: Vec3::new(-2., -1., -1.),
+            horizontal: Vec3::new(4., 0., 0.),
+            vertical: Vec3::new(0., 2., 0.)
+        }
+    }
+
+    fn get_ray(&self, u:f32, v:f32) -> Ray {
+        Ray::new(self.origin, self.lower_left_corner +
+                            u * self.horizontal +
+                            v * self.vertical -
+                            self.origin)
+    }
+}
+
+fn vec3_random<R: Rng>(rng: &mut R, min:f32, max:f32) -> Vec3 {
+    Vec3::new(rng.gen_range(min..max),
+                rng.gen_range(min..max),
+                rng.gen_range(min..max))
+}
+
+fn random_in_unit_sphere<R: Rng>(rng: &mut R) -> Vec3 {
+    loop {
+        let p = vec3_random(rng, -1., 1.);
+        if p.length_squared() <= 1. {
+            return p;
+        }
+    }
+}
+
+fn random_unit_vector<R: Rng>(rng: &mut R) -> Vec3 {
+    random_in_unit_sphere(rng).normalize()
+}
+
+fn ray_colour<R: Rng>(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut R) -> Vec3 {
+    if depth < 0 {
+        return Vec3::ZERO;
+    }
+
+    if let Some(rec) = world.hit(&r, 0.001, f32::INFINITY) {
+        let target = rec.p + rec.normal + random_unit_vector(rng);
+        return 0.5 * ray_colour(world, &Ray::new(rec.p, target - rec.p), depth - 1, rng);
     }
     let unit_direction = r.direction().normalize();
     let t = 0.5 * (unit_direction.y + 1.0);
-    (1.0 - t) * Vec3::new(1.0, 1.0, 1.0) + t * Vec3::new(0.5, 0.7, 1.0)
+    (1.0 - t) * Vec3::ONE + t * Vec3::new(0.5, 0.7, 1.0)
+}
+
+fn write_colour(colour:Vec3, samples_per_pixel:u32) -> [u8; 3] {
+    let scale = 1.0 / (samples_per_pixel as f32);
+    let scaled = colour * scale;
+    let gamma_corrected = Vec3::new(scaled.x.sqrt(),
+                                    scaled.y.sqrt(),
+                                    scaled.z.sqrt());
+    let two55 = 255. * gamma_corrected.clamp(Vec3::ZERO, Vec3::ONE);
+    [
+        two55.x as u8,
+        two55.y as u8,
+        two55.z as u8,
+    ]
 }
 
 fn main() {
     let nx = 200;
     let ny = 100;
+    let ns = 100;
+    let max_depth = 50;
     let mut img = image::RgbImage::new(nx, ny);
+    let mut rng = rand::thread_rng();
 
-    let lower_left_corner = Vec3::new(-2.0, -1.0, -1.0);
-    let horizontal = Vec3::new(4.0, 0.0, 0.0);
-    let vertical = Vec3::new(0.0, 2.0, 0.0);
-    let origin = Vec3::new(0.0, 0.0, 0.0);
+    let camera = Camera::new();
 
-    let sphere = Sphere {
-        centre: Vec3::new(0., 0., -1.),
-        radius: 0.5
-    };
-    let sphere2 = Sphere {
-        centre: Vec3::new(0., -100.5, -1.),
-        radius: 100.
-    };
+    let sphere = Sphere::new(&[0., 0., -1.], 0.5);
+    let sphere2 = Sphere::new(&[0., -100.5, -1.], 100.);
+    let sphere3 = Sphere::new(&[-0.5, -0.5, -0.5], 0.25);
 
     let hit_list = HitableList {
-        list:vec![&sphere, &sphere2]
+        list:vec![&sphere, &sphere2, &sphere3]
     };
 
     for (i, j, pixel) in img.enumerate_pixels_mut() {
-        let u = (i as f32) / (nx as f32);
-        let v = 1.0 - (j as f32) / (ny as f32);
-        let r = Ray::new(origin, lower_left_corner + u * horizontal + v * vertical);
-        let col = colour(&hit_list, &r);
+        let mut col = Vec3::ZERO;
+        for _s in 0..ns {
+            let a:f32 = rng.gen();
+            let b:f32 = rng.gen();
+            let u = ((i as f32) + a) / (nx as f32);
+            let v = 1.0 - ((j as f32) + b) / (ny as f32);
+            let r = camera.get_ray(u, v);
+            col += ray_colour(&hit_list, &r, max_depth, &mut rng);
 
-        let ir = (255.99 * col.x) as u8;
-        let ig = (255.99 * col.y) as u8;
-        let ib = (255.99 * col.z) as u8;
-        *pixel = image::Rgb([ir, ig, ib]);
+        }
+        *pixel = image::Rgb(write_colour(col, ns));
     }
     img.save("out.png").unwrap();
 }
