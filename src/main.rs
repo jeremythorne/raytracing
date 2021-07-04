@@ -2,7 +2,6 @@ use image;
 use glam::{Vec3};
 use rand::{Rng};
 use rand::rngs::ThreadRng;
-use std::rc::Rc;
 
 struct Ray {
     a: Vec3,
@@ -56,17 +55,17 @@ impl Material for Lambertian {
 
 }
 
-struct HitRecord {
+struct HitRecord<'a> {
     t:f32,
     p:Vec3,
     front_face: bool,
     normal:Vec3,
-    material: Rc<dyn Material>
+    material: &'a dyn Material
 }
 
-impl HitRecord {
+impl <'a> HitRecord<'a> {
     fn new(t: f32, p:Vec3, r: &Ray, outward_normal:Vec3,
-            material: Rc<dyn Material>) -> HitRecord {
+            material: &'a dyn Material) -> HitRecord<'a> {
         let (front_face, normal) = HitRecord::face_normal(r, outward_normal);   
         HitRecord {
             t,
@@ -88,14 +87,14 @@ trait Hitable {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord>;
 }
 
-struct Sphere {
+struct Sphere<'a> {
     centre: Vec3,
     radius: f32,
-    material: Rc<dyn Material>
+    material: &'a dyn Material
 }
 
-impl Sphere {
-    fn new(centre:&[f32;3], radius:f32, material: Rc<dyn Material>) -> Sphere {
+impl <'a> Sphere<'a> {
+    fn new(centre:&[f32;3], radius:f32, material: &'a dyn Material) -> Sphere<'a> {
         Sphere {
             centre: Vec3::from_slice(centre),
             radius,
@@ -104,7 +103,7 @@ impl Sphere {
     }
 }
 
-impl Hitable for Sphere {
+impl <'a> Hitable for Sphere<'a> {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord> {
         let oc = r.origin() - self.centre;
         let a = r.direction().dot(r.direction());
@@ -120,7 +119,7 @@ impl Hitable for Sphere {
                     return Some(HitRecord::new(
                         *temp, p, r,
                         (p - self.centre) / self.radius,
-                        Rc::clone(&self.material)));
+                        self.material));
                 }
             }
         }
@@ -236,13 +235,16 @@ fn main() {
 
     let camera = Camera::new();
 
-    let material:Rc<dyn Material> = Rc::new(Lambertian {
+    let material = Lambertian {
         albedo: Vec3::new(0.8, 0.8, 0.)
-    });
+    };
+    let material2 = Lambertian {
+        albedo: Vec3::new(0.0, 0.8, 0.4)
+    };
 
-    let sphere = Sphere::new(&[0., 0., -1.], 0.5, Rc::clone(&material));
-    let sphere2 = Sphere::new(&[0., -100.5, -1.], 100., Rc::clone(&material));
-    let sphere3 = Sphere::new(&[-0.5, -0.5, -0.5], 0.25, Rc::clone(&material));
+    let sphere = Sphere::new(&[0., 0., -1.], 0.5, &material);
+    let sphere2 = Sphere::new(&[0., -100.5, -1.], 100., &material);
+    let sphere3 = Sphere::new(&[-0.5, -0.25, -1.0], 0.25, &material2);
 
     let hit_list = HitableList {
         list:vec![&sphere, &sphere2, &sphere3]
