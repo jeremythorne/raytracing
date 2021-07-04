@@ -3,6 +3,7 @@
 implementation of the exercises in [Ray Tracing in One Weekend](
 https://raytracing.github.io/books/RayTracingInOneWeekend.html) in Rust
 
+![Chapter 13 final render - many spheres](chapter13.png)
 ![Chapter 11 final render - hollow glass, lambertian, and metal spheres with depth of field](chapter11.png)
 
 Non exhaustive list of other implementations:
