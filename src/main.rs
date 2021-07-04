@@ -2,6 +2,7 @@ use image;
 use glam::{Vec3, vec3};
 use rand::{Rng};
 use rand::rngs::ThreadRng;
+use std::rc::Rc;
 
 struct Ray {
     a: Vec3,
@@ -110,17 +111,17 @@ impl Material for Dialectric {
         })
     }
 }
-struct HitRecord<'a> {
+struct HitRecord {
     t:f32,
     p:Vec3,
     front_face: bool,
     normal:Vec3,
-    material: &'a dyn Material
+    material: Rc<dyn Material>
 }
 
-impl <'a> HitRecord<'a> {
+impl HitRecord {
     fn new(t: f32, p:Vec3, r: &Ray, outward_normal:Vec3,
-            material: &'a dyn Material) -> HitRecord<'a> {
+            material: Rc<dyn Material>) -> HitRecord {
         let (front_face, normal) = HitRecord::face_normal(r, outward_normal);   
         HitRecord {
             t,
@@ -142,14 +143,14 @@ trait Hitable {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord>;
 }
 
-struct Sphere<'a> {
+struct Sphere {
     centre: Vec3,
     radius: f32,
-    material: &'a dyn Material
+    material: Rc<dyn Material>
 }
 
-impl <'a> Sphere<'a> {
-    fn new(centre:&[f32;3], radius:f32, material: &'a dyn Material) -> Sphere<'a> {
+impl Sphere {
+    fn new(centre:&[f32;3], radius:f32, material: Rc<dyn Material>) -> Sphere {
         Sphere {
             centre: Vec3::from_slice(centre),
             radius,
@@ -158,7 +159,7 @@ impl <'a> Sphere<'a> {
     }
 }
 
-impl <'a> Hitable for Sphere<'a> {
+impl Hitable for Sphere {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord> {
         let oc = r.origin() - self.centre;
         let a = r.direction().dot(r.direction());
@@ -174,7 +175,7 @@ impl <'a> Hitable for Sphere<'a> {
                     return Some(HitRecord::new(
                         *temp, p, r,
                         (p - self.centre) / self.radius,
-                        self.material));
+                        Rc::clone(&self.material)));
                 }
             }
         }
@@ -182,11 +183,11 @@ impl <'a> Hitable for Sphere<'a> {
     }
 }
 
-struct HitableList<'a> {
-    list:Vec<&'a dyn Hitable>
+struct HitableList {
+    list:Vec<Rc<dyn Hitable>>
 }
 
-impl <'a> Hitable for HitableList<'a> {
+impl Hitable for HitableList {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord> {
         let mut rec:Option<HitRecord> = None;
         let mut closest_so_far = t_max;
@@ -241,7 +242,7 @@ impl Camera {
             vertical,
             u,
             v,
-            w,
+            _w: w,
             lens_radius
         }
     }
@@ -305,6 +306,47 @@ fn refract(uv: Vec3, n: Vec3, etai_over_etat: f32) -> Vec3 {
     r_out_perp + r_out_parallel
 }
 
+fn random_scene(rng: &mut ThreadRng) -> HitableList {
+    let mut list = Vec::<Rc<dyn Hitable>>::new();
+    let ground_material = Rc::new(Lambertian { albedo:vec3(0.5, 0.5, 0.5) });
+    list.push(Rc::new(Sphere::new(&[0., -1000., 0.], 1000.0, ground_material)));
+    
+    list.push(Rc::new(Sphere::new(&[0., 1., 0.], 1.,
+                        Rc::new(Dialectric { ir: 1.5 } ))));
+    list.push(Rc::new(Sphere::new(&[-4., 1., 0.], 1.,
+                        Rc::new(Lambertian { albedo: vec3(0.4, 0.2, 0.1) } ))));
+    list.push(Rc::new(Sphere::new(&[4., 1., 0.], 1.,
+                        Rc::new(Metal { albedo: vec3(0.7, 0.6, 0.5), fuzz: 0. } ))));
+
+    for a in -11..11 {
+        for b in -11..11 {
+            let choose_mat:f32 = rng.gen();
+            let centre = 0.9 * vec3(rng.gen(), 0., rng.gen()) +
+                vec3(a as f32, 0.2, b as f32);
+            
+            if (centre - vec3(4., 0.2, 0.)).length() > 0.9 {
+                let material:Rc<dyn Material> =
+                if choose_mat < 0.8 {
+                    let albedo = vec3(rng.gen(), rng.gen(), rng.gen()) *
+                                 vec3(rng.gen(), rng.gen(), rng.gen());
+                    Rc::new(Lambertian{ albedo })
+                } else if choose_mat < 0.95 {
+                    let albedo = vec3_random(rng, 0.5, 1.);
+                    let fuzz = rng.gen_range(0.0..0.5);
+                    Rc::new(Metal { albedo, fuzz })
+                } else {
+                    Rc::new(Dialectric { ir: 1.5})
+                };
+                list.push(Rc::new(Sphere::new(&centre.to_array(), 0.2, material)));
+             }
+        }
+    }
+
+    HitableList {
+        list
+    }
+}
+
 fn ray_colour(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut ThreadRng) -> Vec3 {
     if depth < 0 {
         return Vec3::ZERO;
@@ -347,43 +389,21 @@ fn main() {
 
     let mut img = image::RgbImage::new(image_width, image_height);
 
-    let look_from = vec3(-2., 2., 1.);
-    let look_at = vec3(0., 0., -1.);
+    let look_from = vec3(13., 2., 3.);
+    let look_at = vec3(0., 0., 0.);
     let camera = Camera::new(
         look_from,
         look_at,
         vec3(0., 1., 0.),
         20., aspect_ratio,
-        0.2,
-        (look_at - look_from).length());
+        0.1,
+        10.);
 
-    let yellow = Lambertian {
-        albedo: vec3(0.8, 0.8, 0.)
-    };
 
-    let blue = Lambertian {
-        albedo: vec3(0.1, 0.2, 0.5)
-    };
+    let world = random_scene(&mut rng);
+    let hit_list = &world;
 
-    let glass = Dialectric {
-        ir: 1.5
-    };
-
-    let metal = Metal {
-        albedo: vec3(0.8, 0.6, 0.2),
-        fuzz: 0.0
-    };
-
-    let models = vec![
-        Sphere::new(&[0., 0., -1.], 0.5, &blue),
-        Sphere::new(&[-1., 0., -1.], 0.5, &glass),
-        Sphere::new(&[-1., 0., -1.], -0.45, &glass),
-        Sphere::new(&[1., 0., -1.], 0.5, &metal),
-        Sphere::new(&[0., -100.5, -1.], 100., &yellow)
-    ];
-    let hit_list = HitableList {
-        list:models.iter().map(|a| a as &dyn Hitable).collect()
-    };
+    let total_pixels = image_width * image_height;
 
     for (i, j, pixel) in img.enumerate_pixels_mut() {
         let mut pixel_colour = Vec3::ZERO;
@@ -393,10 +413,13 @@ fn main() {
             let u = ((i as f32) + a) / (image_width as f32 - 1.);
             let v = 1.0 - ((j as f32) + b) / (image_height as f32 - 1.);
             let r = camera.get_ray(u, v, &mut rng);
-            pixel_colour += ray_colour(&hit_list, &r, max_depth, &mut rng);
+            pixel_colour += ray_colour(hit_list, &r, max_depth, &mut rng);
 
         }
         *pixel = image::Rgb(write_colour(pixel_colour, samples_per_pixel));
+        let percentage_complete = (j * image_width + i) * 100 / total_pixels;
+        print!("\r{}% complete\r", percentage_complete);
     }
+    println!("");
     img.save("out.png").unwrap();
 }
