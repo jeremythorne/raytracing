@@ -55,6 +55,61 @@ impl Material for Lambertian {
 
 }
 
+struct Metal {
+    albedo: Vec3,
+    fuzz: f32
+}
+
+impl Material for Metal {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord, rng: &mut ThreadRng) -> Option<AttenuatedRay> {
+        let reflected = reflect(r_in.direction().normalize(), rec.normal) +
+                self.fuzz * random_in_unit_sphere(rng);
+
+        if reflected.dot(rec.normal) < 0. {
+            None
+        } else {
+            Some(AttenuatedRay {
+                attenuation: self.albedo,
+                ray: Ray::new(rec.p, reflected)
+            })
+        }
+    }
+}
+
+struct Dialectric {
+    ir: f32
+}
+
+impl Dialectric {
+    fn reflectance(&self, cosine:f32, ref_idx:f32) -> f32 {
+        // Schlick's approximation
+        let r0 = (1. - ref_idx) / (1. + ref_idx);
+        let r02 = r0 * r0;
+        r02 + (1. - r0) * (1. - cosine).powi(5)
+    }
+}
+
+impl Material for Dialectric {
+    fn scatter(&self, r_in: &Ray, rec: &HitRecord, rng: &mut ThreadRng) -> Option<AttenuatedRay> {
+
+        let refraction_ratio = if rec.front_face { 1.0/self.ir } else { self.ir };
+        let unit_direction = r_in.direction().normalize();
+
+        let cos_theta = (-unit_direction).dot(rec.normal).min(1.0);
+        let sin_theta = (1.0 - cos_theta * cos_theta).sqrt();
+
+        let cannot_refract = sin_theta * refraction_ratio > 1.;
+        let direction = if cannot_refract || self.reflectance(cos_theta, refraction_ratio) > rng.gen() {
+            reflect(unit_direction, rec.normal)
+        } else {
+            refract(unit_direction, rec.normal, refraction_ratio)
+        };
+        Some(AttenuatedRay {
+            attenuation: Vec3::ONE,
+            ray: Ray::new(rec.p, direction)
+        })
+    }
+}
 struct HitRecord<'a> {
     t:f32,
     p:Vec3,
@@ -194,6 +249,17 @@ fn near_zero(v: Vec3) -> bool {
     v.x.abs() < e && v.y.abs() < e && v.z.abs() < e
 }
 
+fn reflect(a: Vec3, b:Vec3) -> Vec3 {
+    a - 2. * a.dot(b) * b
+}
+
+fn refract(uv: Vec3, n: Vec3, etai_over_etat: f32) -> Vec3 {
+    let cos_theta = (-uv).dot(n).min(1.);
+    let r_out_perp = etai_over_etat * (uv + cos_theta * n);
+    let r_out_parallel = -(1.0 - r_out_perp.length_squared()).abs().sqrt() * n;
+    r_out_perp + r_out_parallel
+}
+
 fn ray_colour(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut ThreadRng) -> Vec3 {
     if depth < 0 {
         return Vec3::ZERO;
@@ -235,19 +301,25 @@ fn main() {
 
     let camera = Camera::new();
 
-    let material = Lambertian {
+    let yellow = Lambertian {
         albedo: Vec3::new(0.8, 0.8, 0.)
     };
-    let material2 = Lambertian {
-        albedo: Vec3::new(0.0, 0.8, 0.4)
+
+    let glass = Dialectric {
+        ir: 1.5
     };
 
-    let sphere = Sphere::new(&[0., 0., -1.], 0.5, &material);
-    let sphere2 = Sphere::new(&[0., -100.5, -1.], 100., &material);
-    let sphere3 = Sphere::new(&[-0.5, -0.25, -1.0], 0.25, &material2);
+    let blue_metal = Metal {
+        albedo: Vec3::new(0.0, 0.8, 0.4),
+        fuzz: 0.2
+    };
+
+    let sphere = Sphere::new(&[0., 0., -1.], 0.5, &glass);
+    let ground_sphere = Sphere::new(&[0., -100.5, -1.], 100., &yellow);
+    let sphere3 = Sphere::new(&[-0.5, -0.25, -1.0], 0.25, &blue_metal);
 
     let hit_list = HitableList {
-        list:vec![&sphere, &sphere2, &sphere3]
+        list:vec![&sphere, &ground_sphere, &sphere3]
     };
 
     for (i, j, pixel) in img.enumerate_pixels_mut() {
