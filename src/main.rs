@@ -1,5 +1,5 @@
 use image;
-use glam::{Vec3};
+use glam::{Vec3, vec3};
 use rand::{Rng};
 use rand::rngs::ThreadRng;
 
@@ -204,29 +204,62 @@ struct Camera {
     origin: Vec3,
     lower_left_corner: Vec3,
     horizontal: Vec3,
-    vertical: Vec3
+    vertical: Vec3,
+    u: Vec3,
+    v: Vec3,
+    _w: Vec3,
+    lens_radius: f32
 }
 
 impl Camera {
-    fn new() -> Camera {
+    fn new(look_from:Vec3,
+            look_at:Vec3,
+            vup:Vec3,
+            fov:f32, 
+            aspect_ratio:f32,
+            aperture:f32,
+            focus_dist:f32
+            ) -> Camera {
+        let theta = fov * std::f32::consts::PI / 180.;
+        let h = (theta / 2.0).tan();
+        let viewport_height = 2.0 * h;
+        let viewport_width = aspect_ratio * viewport_height;
+
+        let w = (look_from - look_at).normalize();
+        let u = vup.cross(w).normalize();
+        let v = w.cross(u);
+
+        let lens_radius = aperture / 2.;
+
+        let origin = look_from;
+        let horizontal = focus_dist * viewport_width * u;
+        let vertical = focus_dist * viewport_height * v;
         Camera {
-            origin: Vec3::ZERO,
-            lower_left_corner: Vec3::new(-2., -1., -1.),
-            horizontal: Vec3::new(4., 0., 0.),
-            vertical: Vec3::new(0., 2., 0.)
+            origin,
+            lower_left_corner: origin - 0.5 * (horizontal + vertical) - focus_dist * w,
+            horizontal,
+            vertical,
+            u,
+            v,
+            w,
+            lens_radius
         }
     }
 
-    fn get_ray(&self, u:f32, v:f32) -> Ray {
-        Ray::new(self.origin, self.lower_left_corner +
-                            u * self.horizontal +
-                            v * self.vertical -
-                            self.origin)
+    fn get_ray(&self, s:f32, t:f32, rng: &mut ThreadRng) -> Ray {
+        let rd = self.lens_radius * random_in_unit_disk(rng);
+        let offset = self.u * rd.x + self.v * rd.y;
+        Ray::new(self.origin + offset,
+                    self.lower_left_corner +
+                            s * self.horizontal +
+                            t * self.vertical -
+                            self.origin -
+                            offset)
     }
 }
 
 fn vec3_random(rng: &mut impl Rng, min:f32, max:f32) -> Vec3 {
-    Vec3::new(rng.gen_range(min..max),
+    vec3(rng.gen_range(min..max),
                 rng.gen_range(min..max),
                 rng.gen_range(min..max))
 }
@@ -242,6 +275,18 @@ fn random_in_unit_sphere(rng: &mut impl Rng) -> Vec3 {
 
 fn random_unit_vector(rng: &mut impl Rng) -> Vec3 {
     random_in_unit_sphere(rng).normalize()
+}
+
+fn random_in_unit_disk(rng: &mut impl Rng) -> Vec3 {
+    loop {
+        let p = vec3(
+            rng.gen_range((-1.)..1.),
+            rng.gen_range((-1.)..1.),
+            0.);
+        if p.length_squared() <= 1. {
+            return p;
+        }
+    }
 }
 
 fn near_zero(v: Vec3) -> bool {
@@ -274,13 +319,13 @@ fn ray_colour(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut ThreadRng) -> 
     }
     let unit_direction = r.direction().normalize();
     let t = 0.5 * (unit_direction.y + 1.0);
-    (1.0 - t) * Vec3::ONE + t * Vec3::new(0.5, 0.7, 1.0)
+    (1.0 - t) * Vec3::ONE + t * vec3(0.5, 0.7, 1.0)
 }
 
 fn write_colour(colour:Vec3, samples_per_pixel:u32) -> [u8; 3] {
     let scale = 1.0 / (samples_per_pixel as f32);
     let scaled = colour * scale;
-    let gamma_corrected = Vec3::new(scaled.x.sqrt(),
+    let gamma_corrected = vec3(scaled.x.sqrt(),
                                     scaled.y.sqrt(),
                                     scaled.z.sqrt());
     let two55 = 255. * gamma_corrected.clamp(Vec3::ZERO, Vec3::ONE);
@@ -292,48 +337,66 @@ fn write_colour(colour:Vec3, samples_per_pixel:u32) -> [u8; 3] {
 }
 
 fn main() {
-    let nx = 200;
-    let ny = 100;
-    let ns = 100;
+    let samples_per_pixel = 100;
     let max_depth = 50;
-    let mut img = image::RgbImage::new(nx, ny);
     let mut rng = rand::thread_rng();
 
-    let camera = Camera::new();
+    let aspect_ratio = 16. / 9.;
+    let image_width = 400;
+    let image_height = (image_width as f32 / aspect_ratio) as u32;
+
+    let mut img = image::RgbImage::new(image_width, image_height);
+
+    let look_from = vec3(-2., 2., 1.);
+    let look_at = vec3(0., 0., -1.);
+    let camera = Camera::new(
+        look_from,
+        look_at,
+        vec3(0., 1., 0.),
+        20., aspect_ratio,
+        0.2,
+        (look_at - look_from).length());
 
     let yellow = Lambertian {
-        albedo: Vec3::new(0.8, 0.8, 0.)
+        albedo: vec3(0.8, 0.8, 0.)
+    };
+
+    let blue = Lambertian {
+        albedo: vec3(0.1, 0.2, 0.5)
     };
 
     let glass = Dialectric {
         ir: 1.5
     };
 
-    let blue_metal = Metal {
-        albedo: Vec3::new(0.0, 0.8, 0.4),
-        fuzz: 0.2
+    let metal = Metal {
+        albedo: vec3(0.8, 0.6, 0.2),
+        fuzz: 0.0
     };
 
-    let sphere = Sphere::new(&[0., 0., -1.], 0.5, &glass);
-    let ground_sphere = Sphere::new(&[0., -100.5, -1.], 100., &yellow);
-    let sphere3 = Sphere::new(&[-0.5, -0.25, -1.0], 0.25, &blue_metal);
-
+    let models = vec![
+        Sphere::new(&[0., 0., -1.], 0.5, &blue),
+        Sphere::new(&[-1., 0., -1.], 0.5, &glass),
+        Sphere::new(&[-1., 0., -1.], -0.45, &glass),
+        Sphere::new(&[1., 0., -1.], 0.5, &metal),
+        Sphere::new(&[0., -100.5, -1.], 100., &yellow)
+    ];
     let hit_list = HitableList {
-        list:vec![&sphere, &ground_sphere, &sphere3]
+        list:models.iter().map(|a| a as &dyn Hitable).collect()
     };
 
     for (i, j, pixel) in img.enumerate_pixels_mut() {
-        let mut col = Vec3::ZERO;
-        for _s in 0..ns {
+        let mut pixel_colour = Vec3::ZERO;
+        for _s in 0..samples_per_pixel {
             let a:f32 = rng.gen();
             let b:f32 = rng.gen();
-            let u = ((i as f32) + a) / (nx as f32);
-            let v = 1.0 - ((j as f32) + b) / (ny as f32);
-            let r = camera.get_ray(u, v);
-            col += ray_colour(&hit_list, &r, max_depth, &mut rng);
+            let u = ((i as f32) + a) / (image_width as f32 - 1.);
+            let v = 1.0 - ((j as f32) + b) / (image_height as f32 - 1.);
+            let r = camera.get_ray(u, v, &mut rng);
+            pixel_colour += ray_colour(&hit_list, &r, max_depth, &mut rng);
 
         }
-        *pixel = image::Rgb(write_colour(col, ns));
+        *pixel = image::Rgb(write_colour(pixel_colour, samples_per_pixel));
     }
     img.save("out.png").unwrap();
 }
