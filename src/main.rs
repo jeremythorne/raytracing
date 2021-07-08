@@ -2,7 +2,6 @@ use image;
 use glam::{Vec3, vec3};
 use rand::{Rng};
 use rand::rngs::ThreadRng;
-use std::rc::Rc;
 
 struct Ray {
     a: Vec3,
@@ -111,17 +110,17 @@ impl Material for Dialectric {
         })
     }
 }
-struct HitRecord {
+struct HitRecord <'a> {
     t:f32,
     p:Vec3,
     front_face: bool,
     normal:Vec3,
-    material: Rc<dyn Material>
+    material: &'a dyn Material
 }
 
-impl HitRecord {
+impl <'a> HitRecord<'a> {
     fn new(t: f32, p:Vec3, r: &Ray, outward_normal:Vec3,
-            material: Rc<dyn Material>) -> HitRecord {
+            material: &'a dyn Material) -> HitRecord<'a> {
         let (front_face, normal) = HitRecord::face_normal(r, outward_normal);   
         HitRecord {
             t,
@@ -143,14 +142,14 @@ trait Hitable {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord>;
 }
 
-struct Sphere {
+struct Sphere<M:Material> {
     centre: Vec3,
     radius: f32,
-    material: Rc<dyn Material>
+    material: M
 }
 
-impl Sphere {
-    fn new(centre:&[f32;3], radius:f32, material: Rc<dyn Material>) -> Sphere {
+impl <M:Material> Sphere<M> {
+    fn new(centre:&[f32;3], radius:f32, material: M) -> Sphere<M> {
         Sphere {
             centre: Vec3::from_slice(centre),
             radius,
@@ -159,7 +158,7 @@ impl Sphere {
     }
 }
 
-impl Hitable for Sphere {
+impl <M:Material> Hitable for Sphere<M> {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord> {
         let oc = r.origin() - self.centre;
         let a = r.direction().dot(r.direction());
@@ -175,7 +174,7 @@ impl Hitable for Sphere {
                     return Some(HitRecord::new(
                         *temp, p, r,
                         (p - self.centre) / self.radius,
-                        Rc::clone(&self.material)));
+                        &self.material));
                 }
             }
         }
@@ -184,7 +183,19 @@ impl Hitable for Sphere {
 }
 
 struct HitableList {
-    list:Vec<Rc<dyn Hitable>>
+    list:Vec<Box<dyn Hitable>>
+}
+
+impl HitableList {
+    fn new() -> HitableList {
+        HitableList {
+            list: vec![]
+        }
+    }
+
+    fn push(&mut self, hitable: impl Hitable + 'static) {
+        self.list.push(Box::new(hitable));
+    }
 }
 
 impl Hitable for HitableList {
@@ -307,16 +318,15 @@ fn refract(uv: Vec3, n: Vec3, etai_over_etat: f32) -> Vec3 {
 }
 
 fn random_scene(rng: &mut ThreadRng) -> HitableList {
-    let mut list = Vec::<Rc<dyn Hitable>>::new();
-    let ground_material = Rc::new(Lambertian { albedo:vec3(0.5, 0.5, 0.5) });
-    list.push(Rc::new(Sphere::new(&[0., -1000., 0.], 1000.0, ground_material)));
+    let mut list = HitableList::new();
+    let ground_material = Lambertian { albedo:vec3(0.5, 0.5, 0.5) };
+    list.push(Sphere::new(&[0., -1000., 0.], 1000.0, ground_material));
     
-    list.push(Rc::new(Sphere::new(&[0., 1., 0.], 1.,
-                        Rc::new(Dialectric { ir: 1.5 } ))));
-    list.push(Rc::new(Sphere::new(&[-4., 1., 0.], 1.,
-                        Rc::new(Lambertian { albedo: vec3(0.4, 0.2, 0.1) } ))));
-    list.push(Rc::new(Sphere::new(&[4., 1., 0.], 1.,
-                        Rc::new(Metal { albedo: vec3(0.7, 0.6, 0.5), fuzz: 0. } ))));
+    list.push(Sphere::new(&[0., 1., 0.], 1., Dialectric { ir: 1.5 } ));
+    list.push(Sphere::new(&[-4., 1., 0.], 1.,
+                        Lambertian { albedo: vec3(0.4, 0.2, 0.1) } ));
+    list.push(Sphere::new(&[4., 1., 0.], 1.,
+                        Metal { albedo: vec3(0.7, 0.6, 0.5), fuzz: 0. } ));
 
     for a in -11..11 {
         for b in -11..11 {
@@ -325,26 +335,21 @@ fn random_scene(rng: &mut ThreadRng) -> HitableList {
                 vec3(a as f32, 0.2, b as f32);
             
             if (centre - vec3(4., 0.2, 0.)).length() > 0.9 {
-                let material:Rc<dyn Material> =
                 if choose_mat < 0.8 {
-                    let albedo = vec3(rng.gen(), rng.gen(), rng.gen()) *
-                                 vec3(rng.gen(), rng.gen(), rng.gen());
-                    Rc::new(Lambertian{ albedo })
+                    let albedo = vec3_random(rng, 0., 1.) * vec3_random(rng, 0., 1.);
+                    list.push(Sphere::new(&centre.to_array(), 0.2, Lambertian{ albedo }));
                 } else if choose_mat < 0.95 {
                     let albedo = vec3_random(rng, 0.5, 1.);
                     let fuzz = rng.gen_range(0.0..0.5);
-                    Rc::new(Metal { albedo, fuzz })
+                    list.push(Sphere::new(&centre.to_array(), 0.2, Metal { albedo, fuzz }));
                 } else {
-                    Rc::new(Dialectric { ir: 1.5})
+                    list.push(Sphere::new(&centre.to_array(), 0.2, Dialectric { ir: 1.5}));
                 };
-                list.push(Rc::new(Sphere::new(&centre.to_array(), 0.2, material)));
              }
         }
     }
 
-    HitableList {
-        list
-    }
+    list
 }
 
 fn ray_colour(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut ThreadRng) -> Vec3 {
