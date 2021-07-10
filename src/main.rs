@@ -2,6 +2,9 @@ use image;
 use glam::{Vec3, vec3};
 use rand::{Rng};
 use rand::rngs::ThreadRng;
+use std::error::Error;
+use std::fs::File;
+use std::io::{BufReader, Read};
 
 struct Ray {
     a: Vec3,
@@ -110,6 +113,9 @@ impl Material for Dialectric {
         })
     }
 }
+
+
+
 struct HitRecord <'a> {
     t:f32,
     p:Vec3,
@@ -179,6 +185,119 @@ impl <M:Material> Hitable for Sphere<M> {
             }
         }
         None
+    }
+}
+
+struct Triangle {
+    vertices: [Vec3; 3],
+    normal: Vec3
+}
+
+struct TriangleHit {
+    t: f32,
+    p: Vec3,
+    n: Vec3
+}
+
+impl Triangle {
+    fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<TriangleHit> {
+        //Moller Trumbore algorithm from scratchapixel.com
+        let v0v1 = self.vertices[1] - self.vertices[0];
+        let v0v2 = self.vertices[2] - self.vertices[0];
+        let pvec = r.direction().cross(v0v2);
+        let det = v0v1.dot(pvec);
+        if det.abs() < 0.0001 {
+            // ray and triangle are parallel
+            return None
+        }
+        let invdet = 1. / det;
+        let tvec = r.origin() - self.vertices[0];
+        let u = tvec.dot(pvec) * invdet;
+        if u < 0. || u > 1. {
+            return None
+        }
+        let qvec = tvec.cross(v0v1);
+        let v = r.direction().dot(qvec) * invdet;
+        if v < 0. || v > 1. {
+            return None
+        }
+
+        let t = v0v2.dot(qvec) * invdet;
+        if t > t_min && t < t_max {
+            let p = r.point_at_parameter(t);
+            Some(TriangleHit { t, p, n: self.normal })
+        } else {
+            None
+        }
+    }
+}
+
+struct Mesh<M:Material> {
+    triangles: Vec<Triangle>,
+    material: M
+}
+
+impl <M:Material> Mesh<M> {
+    fn load(fname: &str, material:M) -> Result<Mesh<M>, Box<dyn Error>> {
+        if !fname.ends_with(".stl") {
+            Err("can only read stl files")?
+        }
+        let file = File::open(fname)?;
+        let mut reader = BufReader::new(file);
+        let mut header = [0u8; 80];
+        reader.read(&mut header)?;
+        if header.starts_with(b"solid") {
+            Err("only binary stl files supported")?
+        }
+        let mut raw_count = [0u8; 4];
+        reader.read(&mut raw_count)?;
+        let count = u32::from_le_bytes(raw_count);
+        println!("{} triangles", count);
+        let mut triangles = Vec::<Triangle>::new();
+        for _ in 0..count {
+            let mut coords = [0.; 3];
+            let mut buf = [0u8; 4];
+            for j in 0..3 {
+                reader.read(&mut buf)?;
+                coords[j] = f32::from_le_bytes(buf);
+            }
+            let normal = Vec3::from(coords);
+            let normal = normal.normalize();
+            let mut vertices = [Vec3::ZERO; 3];
+            for i in 0..3 {
+                for j in 0..3 {
+                    reader.read(&mut buf)?;
+                    coords[j] = f32::from_le_bytes(buf);
+                }
+                vertices[i] = Vec3::from(coords);
+            }
+            triangles.push(Triangle {
+                vertices,
+                normal
+            });
+        }
+        Ok(Mesh {
+            triangles,
+            material
+        })
+    }
+}
+
+impl <M:Material> Hitable for Mesh<M> {
+    fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord> {
+        let mut rec:Option<TriangleHit> = None;
+        let mut closest_so_far = t_max;
+        for triangle in self.triangles.iter() {
+            if let Some(temp_rec) = triangle.hit(r, t_min, closest_so_far) {
+                closest_so_far = temp_rec.t;
+                rec = Some(temp_rec);
+            }     
+        }
+        if let Some(t) = rec {
+            Some(HitRecord::new(t.t, t.p, r, t.n, &self.material))
+        } else {
+            None
+        }
     }
 }
 
@@ -384,12 +503,12 @@ fn write_colour(colour:Vec3, samples_per_pixel:u32) -> [u8; 3] {
 }
 
 fn main() {
-    let samples_per_pixel = 100;
+    let samples_per_pixel = 1;
     let max_depth = 50;
     let mut rng = rand::thread_rng();
 
     let aspect_ratio = 16. / 9.;
-    let image_width = 400;
+    let image_width = 200;
     let image_height = (image_width as f32 / aspect_ratio) as u32;
 
     let mut img = image::RgbImage::new(image_width, image_height);
@@ -405,7 +524,10 @@ fn main() {
         10.);
 
 
-    let world = random_scene(&mut rng);
+    let mug = Mesh::load("mug.stl", Lambertian{ albedo:vec3(1., 1., 1.)}).unwrap();
+
+    //let world = random_scene(&mut rng);
+    let world = mug;
     let hit_list = &world;
 
     let total_pixels = image_width * image_height;
