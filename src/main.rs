@@ -2,6 +2,7 @@ use image;
 use glam::{Vec3, vec3};
 use rand::{Rng};
 use rand::rngs::ThreadRng;
+use byteorder::{LittleEndian, ReadBytesExt};
 use std::error::Error;
 use std::fs::File;
 use std::io::{BufReader, Read};
@@ -250,32 +251,43 @@ impl <M:Material> Mesh<M> {
             Err("only binary stl files supported")?
         }
         let mut raw_count = [0u8; 4];
-        reader.read(&mut raw_count)?;
-        let count = u32::from_le_bytes(raw_count);
+        let count = reader.read_u32::<LittleEndian>()?;
         println!("{} triangles", count);
         let mut triangles = Vec::<Triangle>::new();
-        for _ in 0..count {
+        let mut vmin = Vec3::ZERO;
+        let mut vmax = Vec3::ZERO;
+        for c in 0..count {
             let mut coords = [0.; 3];
-            let mut buf = [0u8; 4];
             for j in 0..3 {
-                reader.read(&mut buf)?;
-                coords[j] = f32::from_le_bytes(buf);
+                coords[j] = reader.read_f32::<LittleEndian>()?;
             }
             let normal = Vec3::from(coords);
             let normal = normal.normalize();
             let mut vertices = [Vec3::ZERO; 3];
             for i in 0..3 {
                 for j in 0..3 {
-                    reader.read(&mut buf)?;
-                    coords[j] = f32::from_le_bytes(buf);
+                    coords[j] = reader.read_f32::<LittleEndian>()?;
+                    if coords[j].abs() > 100. {
+                        println!("{} {} {} coord {}", c, i, j, coords[j]);
+                    }
                 }
                 vertices[i] = Vec3::from(coords);
+                if c == 0 && i == 0 {
+                    vmin = vertices[i].clone();
+                    vmax = vertices[i].clone();
+                } else {
+                    vmin = vmin.min(vertices[i]);
+                    vmax = vmax.max(vertices[i]);
+                }
             }
+            let mut _attributes = [0u8; 2];
+            reader.read(&mut _attributes)?;
             triangles.push(Triangle {
                 vertices,
                 normal
             });
         }
+        println!("min {} max {}", vmin, vmax);
         Ok(Mesh {
             triangles,
             material
@@ -503,12 +515,12 @@ fn write_colour(colour:Vec3, samples_per_pixel:u32) -> [u8; 3] {
 }
 
 fn main() {
-    let samples_per_pixel = 1;
+    let samples_per_pixel = 10;
     let max_depth = 50;
     let mut rng = rand::thread_rng();
 
     let aspect_ratio = 16. / 9.;
-    let image_width = 200;
+    let image_width = 400;
     let image_height = (image_width as f32 / aspect_ratio) as u32;
 
     let mut img = image::RgbImage::new(image_width, image_height);
