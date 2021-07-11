@@ -147,6 +147,43 @@ impl <'a> HitRecord<'a> {
 
 trait Hitable {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord>;
+    fn bounding_box(&self) -> Option<AABB>;
+}
+
+#[derive(Clone, Copy)]
+struct AABB {
+    minimum: Vec3,
+    maximum: Vec3
+}
+
+impl AABB {
+    fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> bool {
+        let mut tm = t_min;
+        let mut tx = t_max;
+        for i in 0..3 {
+            let invd = 1. / r.direction()[i];
+            let mut t0 = (self.minimum[i] - r.origin()[i]) * invd;
+            let mut t1 = (self.maximum[i] - r.origin()[i]) * invd;
+            if invd < 0. {
+                let t = t0;
+                t0 = t1;
+                t1 = t;
+            }
+            tm = tm.max(t0);
+            tx = tx.min(t1);
+            if tx < tm {
+                return false;
+            }
+        }
+        true
+    }
+
+    fn surround(&self, other: &AABB) -> AABB {
+        AABB {
+            minimum: self.minimum.min(other.minimum),
+            maximum: self.maximum.max(other.maximum)
+        }
+    }
 }
 
 struct Sphere<M:Material> {
@@ -186,6 +223,14 @@ impl <M:Material> Hitable for Sphere<M> {
             }
         }
         None
+    }
+
+    fn bounding_box(&self) -> Option<AABB> {
+        let r = vec3(self.radius, self.radius, self.radius);
+        return Some(AABB {
+            minimum: self.centre - r,
+            maximum: self.centre + r
+        })
     }
 }
 
@@ -235,6 +280,7 @@ impl Triangle {
 
 struct Mesh<M:Material> {
     triangles: Vec<Triangle>,
+    aabb: AABB,
     material: M
 }
 
@@ -250,7 +296,6 @@ impl <M:Material> Mesh<M> {
         if header.starts_with(b"solid") {
             Err("only binary stl files supported")?
         }
-        let mut raw_count = [0u8; 4];
         let count = reader.read_u32::<LittleEndian>()?;
         println!("{} triangles", count);
         let mut triangles = Vec::<Triangle>::new();
@@ -271,7 +316,8 @@ impl <M:Material> Mesh<M> {
                         println!("{} {} {} coord {}", c, i, j, coords[j]);
                     }
                 }
-                vertices[i] = Vec3::from(coords);
+                // swap z, y
+                vertices[i] = Vec3::new(coords[0], coords[2], coords[1]);
                 if c == 0 && i == 0 {
                     vmin = vertices[i].clone();
                     vmax = vertices[i].clone();
@@ -290,6 +336,7 @@ impl <M:Material> Mesh<M> {
         println!("min {} max {}", vmin, vmax);
         Ok(Mesh {
             triangles,
+            aabb: AABB {minimum: vmin, maximum: vmax},
             material
         })
     }
@@ -297,6 +344,9 @@ impl <M:Material> Mesh<M> {
 
 impl <M:Material> Hitable for Mesh<M> {
     fn hit(&self, r: &Ray, t_min:f32, t_max:f32) -> Option<HitRecord> {
+        if !self.aabb.hit(r, t_min, t_max) {
+            return None
+        }
         let mut rec:Option<TriangleHit> = None;
         let mut closest_so_far = t_max;
         for triangle in self.triangles.iter() {
@@ -310,6 +360,10 @@ impl <M:Material> Hitable for Mesh<M> {
         } else {
             None
         }
+    }
+
+    fn bounding_box(&self) -> Option<AABB> {
+        Some(self.aabb)
     }
 }
 
@@ -340,6 +394,20 @@ impl Hitable for HitableList {
             }     
         }
         rec
+    }
+
+    fn bounding_box(&self) -> Option<AABB> {
+        let mut a:Option<AABB> = None;
+        for h in self.list.iter() {
+            if let Some(b) = h.bounding_box() {
+                if let Some(aa) = a {
+                    a = Some(aa.surround(&b));
+                } else {
+                    a = Some(b);
+                }
+            }
+        }
+        a
     }
 }
 
@@ -525,7 +593,7 @@ fn main() {
 
     let mut img = image::RgbImage::new(image_width, image_height);
 
-    let look_from = vec3(13., 2., 3.);
+    let look_from = vec3(6., 2., 6.);
     let look_at = vec3(0., 0., 0.);
     let camera = Camera::new(
         look_from,
@@ -539,7 +607,10 @@ fn main() {
     let mug = Mesh::load("mug.stl", Lambertian{ albedo:vec3(1., 1., 1.)}).unwrap();
 
     //let world = random_scene(&mut rng);
-    let world = mug;
+    let mut world = HitableList::new();
+    world.push(mug);
+    world.push(Sphere::new(&[0., -100., 0.], 100., Lambertian{ albedo:vec3( 0.2, 0.3, 0.5 )}));
+
     let hit_list = &world;
 
     let total_pixels = image_width * image_height;
