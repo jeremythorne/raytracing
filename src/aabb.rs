@@ -49,6 +49,9 @@ impl AABB {
     }
 
     pub fn overlap(t_min: Vec3, t_max: Vec3) -> bool {
+        if t_min.is_nan() || t_max.is_nan() {
+            panic!("t_min {} t_max {}", t_min, t_max);
+        }
         let tmax_of_min = t_min.max_element();
         let tmin_of_max = t_max.min_element();
         tmin_of_max > tmax_of_min
@@ -59,6 +62,11 @@ impl AABB {
             minimum: self.minimum.min(other.minimum),
             maximum: self.maximum.max(other.maximum)
         }
+    }
+
+    pub fn volume(&self) -> f32 {
+        let diff = self.maximum - self.minimum;
+        diff.x * diff.y * diff.z
     }
 }
 
@@ -109,4 +117,28 @@ mod tests {
         let aabb = AABB{ minimum: vec3(-1., -1., -1.), maximum: vec3(1., 1., 1.)};
         let (a, b) = aabb.hit_t(&r);
         assert_eq!(AABB::overlap(a, b), false);
-    }}
+    }
+
+    #[test]
+    fn test_half_hit_t() {
+        // vector parallel to x-axis
+        let r = Ray::new(vec3(-2., 0.5, 0.5), vec3(1., 0., 0.));
+        // unit cube
+        let aabb = AABB{ minimum: vec3(0., 0., 0.), maximum: vec3(1., 1., 1.)};
+        let (a, b) = aabb.hit_t(&r);
+        assert_eq!(AABB::overlap(a, b), true);
+
+        // now divide the cube in two down the x-axis
+        let mut right2 = aabb.minimum.clone();
+        right2[0] = (aabb.minimum[0] + aabb.maximum[0]) / 2.;
+        let right_aabb = AABB{ minimum: right2, maximum: aabb.maximum};
+        let (a2, b2) = right_aabb.hit_t(&r);
+        // minimum t value on x-axis should be mid point between a[0] and b[0]
+        let mid = (a[0] + b[0]) / 2.;
+        assert_eq!(a2[0], mid);
+        assert_eq!(b2, b);
+        assert_eq!(AABB::overlap(a2, b2), true);
+    } 
+
+
+}

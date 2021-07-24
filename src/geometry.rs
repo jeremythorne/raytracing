@@ -85,7 +85,7 @@ impl Triangle {
         }
         let qvec = tvec.cross(v0v1);
         let v = r.direction().dot(qvec) * invdet;
-        if v < 0. || v > 1. {
+        if v < 0. || (u + v) > 1. {
             return None
         }
 
@@ -105,43 +105,79 @@ pub struct Mesh {
 }
 
 impl Mesh {
-    pub fn cube() -> Mesh {
+
+    fn cube_triangles(scale: f32, translate:Vec3) -> (Vec<Vec3>, Vec<IndexedTriangle>) {
         let vertices = vec!(
-            vec3(-0.5, -0.5, -0.5),
-            vec3(-0.5, 0.5, -0.5),
-            vec3(0.5, 0.5, -0.5),
-            vec3(0.5, -0.5, -0.5),
-            vec3(-0.5, -0.5, 0.5),
-            vec3(-0.5, 0.5, 0.5),
-            vec3(0.5, 0.5, 0.5),
-            vec3(0.5, -0.5, 0.5),
+            vec3(-0.5, -0.5, -0.5)* scale + translate,
+            vec3(-0.5, 0.5, -0.5) * scale + translate,
+            vec3(0.5, 0.5, -0.5)  * scale + translate,
+            vec3(0.5, -0.5, -0.5) * scale + translate,
+            vec3(-0.5, -0.5, 0.5) * scale + translate,
+            vec3(-0.5, 0.5, 0.5)  * scale + translate,
+            vec3(0.5, 0.5, 0.5)   * scale + translate,
+            vec3(0.5, -0.5, 0.5)  * scale + translate,
         );
 
         let indexed_triangles = vec!(
-            //// front
+            // front
             IndexedTriangle { indices: [4, 6, 5], normal: vec3(0., 0., -1.) },
-            //IndexedTriangle { indices: [4, 7, 6], normal: vec3(0., 0., -1.) },
-            //// back
-            //IndexedTriangle { indices: [3, 1, 2], normal: vec3(0., 0., 1.) },
-            //IndexedTriangle { indices: [3, 0, 1], normal: vec3(0., 0., 1.) },
-            //// left
-            //IndexedTriangle { indices: [0, 5, 1], normal: vec3(-1., 0., 0.) },
-            //IndexedTriangle { indices: [0, 4, 5], normal: vec3(-10., 0., 0.) },
-            //// right
-            //IndexedTriangle { indices: [7, 2, 6], normal: vec3(1., 0., 0.) },
-            //IndexedTriangle { indices: [7, 3, 2], normal: vec3(1., 0., 0.) },
-            //// top
-            //IndexedTriangle { indices: [5, 2, 1], normal: vec3(0., 1., 0.) },
-            //IndexedTriangle { indices: [5, 6, 2], normal: vec3(0., 1., 0.) },
-            //// bottom
-            //IndexedTriangle { indices: [7, 0, 3], normal: vec3(0., -1., 0.) },
-            //IndexedTriangle { indices: [7, 4, 0], normal: vec3(0., -1., 0.) },
+            IndexedTriangle { indices: [4, 7, 6], normal: vec3(0., 0., -1.) },
+            // back
+            IndexedTriangle { indices: [3, 1, 2], normal: vec3(0., 0., 1.) },
+            IndexedTriangle { indices: [3, 0, 1], normal: vec3(0., 0., 1.) },
+            // left
+            IndexedTriangle { indices: [0, 5, 1], normal: vec3(-1., 0., 0.) },
+            IndexedTriangle { indices: [0, 4, 5], normal: vec3(-10., 0., 0.) },
+            // right
+            IndexedTriangle { indices: [7, 2, 6], normal: vec3(1., 0., 0.) },
+            IndexedTriangle { indices: [7, 3, 2], normal: vec3(1., 0., 0.) },
+            // top
+            IndexedTriangle { indices: [5, 2, 1], normal: vec3(0., 1., 0.) },
+            IndexedTriangle { indices: [5, 6, 2], normal: vec3(0., 1., 0.) },
+            // bottom
+            IndexedTriangle { indices: [7, 0, 3], normal: vec3(0., -1., 0.) },
+            IndexedTriangle { indices: [7, 4, 0], normal: vec3(0., -1., 0.) },
          );
+         (vertices, indexed_triangles)
+    }
 
-         Mesh {
+    pub fn cube(scale:f32, translate:Vec3) -> Mesh {
+        let (vertices, indexed_triangles) = Mesh::cube_triangles(scale, translate);
+        Mesh {
              kd_tree: KdTree::new(&indexed_triangles, &vertices),
              vertices
          }
+    }
+
+    pub fn cube_of_cubes(n:u32) -> Mesh {
+        let scale = 1.0 / (n as f32);
+        let offset = ((n - 1) as f32 / 2.) * scale;
+        let mut vertices = Vec::<Vec3>::new();
+        let mut indexed_triangles = Vec::<IndexedTriangle>::new();
+        for k in 0..n {
+            for j in 0..n {
+                for i in 0..n {
+                    let translate = vec3(
+                        i as f32 * scale,
+                        j as f32 * scale,
+                        k as f32 * scale
+                    ) - Vec3::splat(offset);
+                    let (mut v, mut t) = Mesh::cube_triangles(scale, translate);
+                    let index_offset = i + j * n + k * n * n;
+                    for tt in t.iter_mut() {
+                        for ti in tt.indices.iter_mut() {
+                            *ti += (index_offset * 8) as usize;
+                        }
+                    }
+                    vertices.append(&mut v);
+                    indexed_triangles.append(&mut t);
+                }
+            }
+        }
+        Mesh {
+             kd_tree: KdTree::new(&indexed_triangles, &vertices),
+             vertices
+        }
     }
 
     pub fn load(fname: &str) -> Result<Mesh, Box<dyn Error>> {
@@ -158,8 +194,6 @@ impl Mesh {
         let count = reader.read_u32::<LittleEndian>()?;
         println!("{} triangles", count);
         let mut triangles = Vec::<Triangle>::new();
-        let mut vmin = Vec3::ZERO;
-        let mut vmax = Vec3::ZERO;
         for c in 0..count {
             let mut coords = [0.; 3];
             for j in 0..3 {
@@ -177,13 +211,6 @@ impl Mesh {
                 }
                 // swap z, y
                 vertices[i] = Vec3::new(coords[0], coords[2], coords[1]);
-                if c == 0 && i == 0 {
-                    vmin = vertices[i].clone();
-                    vmax = vertices[i].clone();
-                } else {
-                    vmin = vmin.min(vertices[i]);
-                    vmax = vmax.max(vertices[i]);
-                }
             }
             let mut _attributes = [0u8; 2];
             reader.read(&mut _attributes)?;
@@ -192,7 +219,6 @@ impl Mesh {
                 normal
             });
         }
-        println!("min {} max {}", vmin, vmax);
         let (indexed_triangles, vertices) = Mesh::to_indexed(triangles);
         let kd_tree = KdTree::new(&indexed_triangles, &vertices);
         Ok(Mesh {

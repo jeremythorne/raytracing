@@ -44,7 +44,7 @@ fn ray_colour(world: &dyn Hitable, r: &Ray, depth: i32, rng: &mut ThreadRng) -> 
         return Vec3::ZERO;
     }
 
-    if let Some(rec) = world.hit(&r, 0.001, f32::INFINITY) {
+    if let Some(rec) = world.hit(&r, 0.001, 1000.0) {
         if let Some(scattered) = rec.material.scatter(r, &rec, rng) {
             return scattered.attenuation * ray_colour(world, &scattered.ray, depth - 1, rng);
         } else {
@@ -93,15 +93,26 @@ fn main() {
 
 
     let mug = MaterialMesh{
-            // mesh: Mesh::load("mug.stl").unwrap(), 
-            mesh: Mesh::cube(), 
-            material: Lambertian{ albedo:vec3(1., 1., 0.2)}
+            mesh: Mesh::load("mug.stl").unwrap(), 
+            // mesh: Mesh::cube_of_cubes(5), 
+            material: Metal{ albedo:vec3(1., 1., 0.2), fuzz: 0.2}
     };
 
+    let cube = MaterialMesh{
+            mesh: Mesh::cube(1., vec3(2., 0.5, 0.)), 
+            material: Lambertian{ albedo:vec3(0.2, 1., 0.2)}
+    };
+
+    let cube2 = MaterialMesh{
+            mesh: Mesh::cube(0.5, vec3(0., 0.25, 2.)), 
+            material: Lambertian { albedo:vec3(1., 0.2, 0.2) }
+    };
     //let world = random_scene(&mut rng);
     let mut world = HitableList::new();
     world.push(mug);
-    // world.push(Sphere::new(&[0., -100., 0.], 100., Lambertian{ albedo:vec3( 0.2, 0.3, 0.5 )}));
+    world.push(cube);
+    world.push(cube2);
+    world.push(Sphere::new(&[0., -100., 0.], 100., Lambertian{ albedo:vec3( 0.2, 0.3, 0.5 )}));
 
     let hit_list = &world;
 
