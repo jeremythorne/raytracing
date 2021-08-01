@@ -57,7 +57,7 @@ impl Dialectric {
         // Schlick's approximation
         let r0 = (1. - ref_idx) / (1. + ref_idx);
         let r02 = r0 * r0;
-        r02 + (1. - r0) * (1. - cosine).powi(5)
+        r02 + (1. - r02) * (1. - cosine).powi(5)
     }
 }
 
